@@ -14,12 +14,15 @@ def resource_path(relative_path: str) -> str:
 
 class GameLogic:
     BOARD_SIZE = 15
+    DIRECTIONS = (
+        ((0, 1), (0, -1)),
+        ((1, 0), (-1, 0)),
+        ((1, 1), (-1, -1)),
+        ((1, -1), (-1, 1)),
+    )
 
     def __init__(self) -> None:
-        self.board = [[0 for _ in range(self.BOARD_SIZE)] for _ in range(self.BOARD_SIZE)]
-        self.current_player = 1
-        self.game_over = False
-        self.winner = 0
+        self.reset()
 
     def is_valid_move(self, row: int, col: int) -> bool:
         if not (0 <= row < self.BOARD_SIZE and 0 <= col < self.BOARD_SIZE):
@@ -44,22 +47,15 @@ class GameLogic:
         return True
 
     def check_win(self, start_row: int, start_col: int, player: int) -> bool:
-        directions = [
-            [(0, 1), (0, -1)],
-            [(1, 0), (-1, 0)],
-            [(1, 1), (-1, -1)],
-            [(1, -1), (-1, 1)],
-        ]
-
-        for direction_pair in directions:
+        for direction_pair in self.DIRECTIONS:
             count = 1
 
-            for dx, dy in direction_pair:
+            for d_row, d_col in direction_pair:
                 temp_row, temp_col = start_row, start_col
 
                 while True:
-                    temp_row += dx
-                    temp_col += dy
+                    temp_row += d_row
+                    temp_col += d_col
 
                     if (0 <= temp_row < self.BOARD_SIZE and
                             0 <= temp_col < self.BOARD_SIZE and
@@ -88,26 +84,24 @@ class GameLogic:
 
 class GameRenderer:
     GRID_SIZE = 40
-    MARGIN = 60
+    MARGIN = 82
     PIECE_RADIUS = 16
     LINE_WIDTH = 1
     BOARD_BORDER_PADDING = 10
     STAR_POINTS = ((3, 3), (3, 11), (7, 7), (11, 3), (11, 11))
     STAR_POINT_RADIUS = 4
-    MUSIC_RIGHT_MARGIN = 20
-    TEXT_TO_BOARD_GAP = 8
 
-    PAPER_WHITE = (248, 246, 240)
-    INK_BLACK = (45, 45, 45)
-    DARK_WOOD = (168, 124, 90)
-    LIGHT_WOOD = (210, 180, 140)
-    ACCENT_RED = (180, 70, 60)
-    ACCENT_BLUE = (80, 110, 140)
-    MUSIC_DISABLED = (150, 150, 150)
-    STONE_BLACK = (60, 60, 60)
-    STONE_WHITE = (230, 225, 210)
-    STONE_BLACK_HIGHLIGHT = (100, 100, 100)
-    STONE_WHITE_HIGHLIGHT = (200, 200, 190)
+    PAPER_WHITE = (245, 240, 229)
+    INK_BLACK = (56, 52, 47)
+    DARK_WOOD = (154, 118, 82)
+    LIGHT_WOOD = (213, 181, 138)
+    ACCENT_RED = (186, 82, 68)
+    ACCENT_BLUE = (96, 116, 134)
+    MUSIC_DISABLED = (158, 152, 141)
+    STONE_BLACK = (50, 47, 43)
+    STONE_WHITE = (234, 227, 212)
+    STONE_BLACK_HIGHLIGHT = (95, 90, 84)
+    STONE_WHITE_HIGHLIGHT = (203, 196, 181)
     ICON_ASSET_PATH = os.path.join("assets", "AppIcon.png")
     FONT_ASSET_PATH = os.path.join("assets", "fonts", "OtsutomeFont_Ver3_20.ttf")
     TITLE_TEXT = "五目並べ"
@@ -119,15 +113,16 @@ class GameRenderer:
         "white_win": "白の勝ち！ Rキーで再開",
         "draw": "引き分け！ Rキーで再開",
     }
-    MUSIC_TEXTS = {
-        "playing": "音楽: ON",
-        "paused": "音楽: OFF",
-        "disabled": "音楽: OFF",
+    MUSIC_LABEL_TEXT = "音楽: "
+    MUSIC_STATE_TEXTS = {
+        "playing": "ON",
+        "paused": "OFF",
+        "disabled": "OFF",
     }
 
     def __init__(self, board_size: int) -> None:
         self.board_size = board_size
-        self.window_size = 2 * self.MARGIN + (self.board_size - 1) * self.GRID_SIZE
+        self.window_size = 2 * self.MARGIN + (self.board_size - 1) * self.GRID_SIZE + 1
 
         pygame.init()
         pygame.display.set_caption("Gomoku")
@@ -142,19 +137,23 @@ class GameRenderer:
         )
         self.status_surfaces = self.build_status_surfaces()
         self.music_surfaces = self.build_music_surfaces()
-        self.music_button_rect = self.build_music_button_rect()
+        self.music_label_surfaces = self.build_music_label_surfaces()
+        self.music_text_center_y = self.get_board_rect().top // 2
+        self.black_piece_surface, self.white_piece_surface = self.build_piece_surfaces()
+        self.board_surface = self.build_board_surface()
 
     def load_font(self, font_size: int) -> pygame.font.Font:
         font_path = resource_path(self.FONT_ASSET_PATH)
         if not os.path.isfile(font_path):
             raise FileNotFoundError(
-                f"找不到字体文件: {font_path}. 请确认 OtsutomeFont_Ver3_20.ttf 已放入 assets/fonts."
+                f"フォントファイルが見つかりません: {font_path}. "
+                "OtsutomeFont_Ver3_20.ttf を assets/fonts に配置してください."
             )
 
         try:
             return pygame.font.Font(font_path, font_size)
         except (FileNotFoundError, pygame.error) as error:
-            raise RuntimeError(f"加载字体失败: {font_path}") from error
+            raise RuntimeError(f"フォントの読み込みに失敗しました: {font_path}") from error
 
     def render_text_surface(
         self,
@@ -165,42 +164,29 @@ class GameRenderer:
 
     def build_status_surfaces(self) -> dict[str, pygame.Surface]:
         return {
-            "black_turn": self.render_text_surface(
-                self.STATUS_TEXTS["black_turn"],
-                self.ACCENT_BLUE,
-            ),
-            "white_turn": self.render_text_surface(
-                self.STATUS_TEXTS["white_turn"],
-                self.ACCENT_BLUE,
-            ),
-            "black_win": self.render_text_surface(
-                self.STATUS_TEXTS["black_win"],
-                self.ACCENT_RED,
-            ),
-            "white_win": self.render_text_surface(
-                self.STATUS_TEXTS["white_win"],
-                self.ACCENT_RED,
-            ),
-            "draw": self.render_text_surface(
-                self.STATUS_TEXTS["draw"],
-                self.ACCENT_RED,
-            ),
+            key: self.render_text_surface(
+                text,
+                self.ACCENT_BLUE if key.endswith("_turn") else self.ACCENT_RED,
+            )
+            for key, text in self.STATUS_TEXTS.items()
         }
 
     def build_music_surfaces(self) -> dict[str, pygame.Surface]:
         return {
-            "playing": self.render_text_surface(
-                self.MUSIC_TEXTS["playing"],
-                self.ACCENT_BLUE,
-            ),
-            "paused": self.render_text_surface(
-                self.MUSIC_TEXTS["paused"],
-                self.ACCENT_BLUE,
-            ),
-            "disabled": self.render_text_surface(
-                self.MUSIC_TEXTS["disabled"],
-                self.MUSIC_DISABLED,
-            ),
+            key: self.render_text_surface(
+                text,
+                self.MUSIC_DISABLED if key == "disabled" else self.ACCENT_BLUE,
+            )
+            for key, text in self.MUSIC_STATE_TEXTS.items()
+        }
+
+    def build_music_label_surfaces(self) -> dict[str, pygame.Surface]:
+        return {
+            key: self.render_text_surface(self.MUSIC_LABEL_TEXT, color)
+            for key, color in (
+                ("enabled", self.ACCENT_BLUE),
+                ("disabled", self.MUSIC_DISABLED),
+            )
         }
 
     def get_board_rect(self) -> pygame.Rect:
@@ -212,102 +198,115 @@ class GameRenderer:
             self.window_size - 2 * self.MARGIN + 2 * padding,
         )
 
-    def build_music_button_rect(self) -> pygame.Rect:
-        board_rect = self.get_board_rect()
-        button_width = max(surface.get_width() for surface in self.music_surfaces.values())
-        button_height = max(surface.get_height() for surface in self.music_surfaces.values())
-        button_x = self.window_size - button_width - self.MUSIC_RIGHT_MARGIN
-        button_y = board_rect.top - self.TEXT_TO_BOARD_GAP - button_height
-        return pygame.Rect(button_x, button_y, button_width, button_height)
-
     def grid_to_screen(self, row: int, col: int) -> tuple[int, int]:
         return self.MARGIN + col * self.GRID_SIZE, self.MARGIN + row * self.GRID_SIZE
 
-    def draw_board(self) -> None:
-        self.screen.fill(self.PAPER_WHITE)
+    def build_board_surface(self) -> pygame.Surface:
+        surface = pygame.Surface((self.window_size, self.window_size))
+        surface.fill(self.PAPER_WHITE)
 
-        board_rect = self.get_board_rect()
         pygame.draw.rect(
-            self.screen,
+            surface,
             self.LIGHT_WOOD,
-            board_rect,
+            self.get_board_rect(),
         )
 
+        grid_end = self.MARGIN + (self.board_size - 1) * self.GRID_SIZE
         for i in range(self.board_size):
             pygame.draw.line(
-                self.screen,
+                surface,
                 self.DARK_WOOD,
                 (self.MARGIN, self.MARGIN + i * self.GRID_SIZE),
-                (self.window_size - self.MARGIN, self.MARGIN + i * self.GRID_SIZE),
+                (grid_end, self.MARGIN + i * self.GRID_SIZE),
                 self.LINE_WIDTH,
             )
             pygame.draw.line(
-                self.screen,
+                surface,
                 self.DARK_WOOD,
                 (self.MARGIN + i * self.GRID_SIZE, self.MARGIN),
-                (self.MARGIN + i * self.GRID_SIZE, self.window_size - self.MARGIN),
+                (self.MARGIN + i * self.GRID_SIZE, grid_end),
                 self.LINE_WIDTH,
             )
 
         for row, col in self.STAR_POINTS:
-            pygame.draw.circle(
-                self.screen,
-                self.INK_BLACK,
-                self.grid_to_screen(row, col),
+            star_x, star_y = self.grid_to_screen(row, col)
+            self.draw_centered_disc(
+                surface,
+                star_x,
+                star_y,
                 self.STAR_POINT_RADIUS,
+                self.INK_BLACK,
             )
 
-    def draw_black_piece(self, center: tuple[int, int]) -> None:
-        center_x, center_y = center
-        pygame.draw.circle(
-            self.screen,
-            self.STONE_BLACK,
-            center,
-            self.PIECE_RADIUS,
+        return surface.convert()
+
+    def draw_board(self) -> None:
+        self.screen.blit(self.board_surface, (0, 0))
+
+    @staticmethod
+    def disc_threshold(radius: int) -> int:
+        return radius * radius + radius // 2
+
+    @staticmethod
+    def draw_centered_disc(
+        surface: pygame.Surface,
+        center_x: int,
+        center_y: int,
+        radius: int,
+        color: tuple[int, int, int],
+        width: int = 0,
+    ) -> None:
+        outer_threshold = GameRenderer.disc_threshold(radius)
+        inner_threshold = (
+            GameRenderer.disc_threshold(radius - width) if width > 0 else -1
         )
-        pygame.draw.circle(
-            self.screen,
+        for dy in range(-radius, radius + 1):
+            for dx in range(-radius, radius + 1):
+                distance_squared = dx * dx + dy * dy
+                if inner_threshold < distance_squared <= outer_threshold:
+                    surface.set_at((center_x + dx, center_y + dy), color)
+
+    def build_piece_surfaces(self) -> tuple[pygame.Surface, pygame.Surface]:
+        radius = self.PIECE_RADIUS
+        size = 2 * radius + 1
+
+        black_surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        self.draw_centered_disc(black_surface, radius, radius, radius, self.STONE_BLACK)
+        self.draw_centered_disc(
+            black_surface,
+            radius - radius // 3,
+            radius - radius // 3,
+            radius // 4,
             self.STONE_BLACK_HIGHLIGHT,
-            (
-                center_x - self.PIECE_RADIUS // 3,
-                center_y - self.PIECE_RADIUS // 3,
-            ),
-            self.PIECE_RADIUS // 4,
         )
 
-    def draw_white_piece(self, center: tuple[int, int]) -> None:
-        center_x, center_y = center
-        pygame.draw.circle(
-            self.screen,
-            self.STONE_WHITE,
-            center,
-            self.PIECE_RADIUS,
+        white_surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        self.draw_centered_disc(white_surface, radius, radius, radius, self.STONE_WHITE)
+        self.draw_centered_disc(
+            white_surface, radius, radius, radius, self.DARK_WOOD, width=1
         )
-        pygame.draw.circle(
-            self.screen,
-            self.DARK_WOOD,
-            center,
-            self.PIECE_RADIUS,
-            1,
-        )
-        pygame.draw.circle(
-            self.screen,
+        self.draw_centered_disc(
+            white_surface,
+            radius + radius // 4,
+            radius + radius // 4,
+            radius // 3,
             self.STONE_WHITE_HIGHLIGHT,
-            (
-                center_x + self.PIECE_RADIUS // 4,
-                center_y + self.PIECE_RADIUS // 4,
-            ),
-            self.PIECE_RADIUS // 3,
         )
+
+        return black_surface, white_surface
 
     def draw_pieces(self, board: list[list[int]]) -> None:
-        for i in range(self.board_size):
-            for j in range(self.board_size):
-                center = self.grid_to_screen(i, j)
-                if board[i][j] == 1:
-                    self.draw_black_piece(center)
-                elif board[i][j] == 2:
-                    self.draw_white_piece(center)
+        for row in range(self.board_size):
+            for col in range(self.board_size):
+                center = self.grid_to_screen(row, col)
+                top_left = (
+                    center[0] - self.PIECE_RADIUS,
+                    center[1] - self.PIECE_RADIUS,
+                )
+                if board[row][col] == 1:
+                    self.screen.blit(self.black_piece_surface, top_left)
+                elif board[row][col] == 2:
+                    self.screen.blit(self.white_piece_surface, top_left)
 
     @staticmethod
     def get_status_key(current_player: int, game_over: bool, winner: int) -> str:
@@ -329,14 +328,16 @@ class GameRenderer:
         music_playing: bool,
     ) -> None:
         board_rect = self.get_board_rect()
-        title_y = board_rect.top - self.TEXT_TO_BOARD_GAP - self.title_surface.get_height()
+        title_y = (board_rect.top - self.title_surface.get_height()) // 2
         self.screen.blit(
             self.title_surface,
             (self.window_size // 2 - self.title_surface.get_width() // 2, title_y),
         )
 
-        status_surface = self.get_status_surface(status_key)
-        status_y = board_rect.bottom + self.TEXT_TO_BOARD_GAP
+        status_surface = self.status_surfaces[status_key]
+        status_y = board_rect.bottom + (
+            self.window_size - board_rect.bottom - status_surface.get_height()
+        ) // 2
         self.screen.blit(
             status_surface,
             (
@@ -345,39 +346,54 @@ class GameRenderer:
             ),
         )
 
-        music_surface, music_rect = self.get_music_surface_and_rect(
+        label_surface, state_surface = self.get_music_surfaces(
             music_toggle_enabled,
             music_playing,
         )
-        self.screen.blit(music_surface, music_rect.topleft)
+        label_rect = label_surface.get_rect(
+            midright=(board_rect.right, self.music_text_center_y)
+        )
+        state_rect = state_surface.get_rect(
+            midleft=(board_rect.right, self.music_text_center_y)
+        )
+        self.screen.blit(label_surface, label_rect)
+        self.screen.blit(state_surface, state_rect)
 
     def is_music_button_clicked(
         self,
         mouse_x: int,
         mouse_y: int,
         music_toggle_enabled: bool,
+        music_playing: bool,
     ) -> bool:
         if not music_toggle_enabled:
             return False
-        return self.music_button_rect.collidepoint(mouse_x, mouse_y)
+        label_surface, state_surface = self.get_music_surfaces(
+            music_toggle_enabled, music_playing
+        )
+        hit_height = max(label_surface.get_height(), state_surface.get_height())
+        hit_rect = pygame.Rect(
+            self.get_board_rect().right - label_surface.get_width(),
+            self.music_text_center_y - hit_height // 2,
+            label_surface.get_width() + state_surface.get_width(),
+            hit_height,
+        )
+        return hit_rect.collidepoint(mouse_x, mouse_y)
 
-    def get_status_surface(self, status_key: str) -> pygame.Surface:
-        return self.status_surfaces[status_key]
-
-    def get_music_surface_and_rect(
+    def get_music_surfaces(
         self,
         music_toggle_enabled: bool,
         music_playing: bool,
-    ) -> tuple[pygame.Surface, pygame.Rect]:
+    ) -> tuple[pygame.Surface, pygame.Surface]:
         if music_toggle_enabled and music_playing:
-            music_surface = self.music_surfaces["playing"]
+            state_key = "playing"
         elif music_toggle_enabled:
-            music_surface = self.music_surfaces["paused"]
+            state_key = "paused"
         else:
-            music_surface = self.music_surfaces["disabled"]
+            state_key = "disabled"
 
-        music_rect = music_surface.get_rect(topleft=self.music_button_rect.topleft)
-        return music_surface, music_rect
+        label_key = "enabled" if music_toggle_enabled else "disabled"
+        return self.music_label_surfaces[label_key], self.music_surfaces[state_key]
 
     def screen_to_grid(self, mouse_x: int, mouse_y: int) -> tuple[int, int] | None:
         col = round((mouse_x - self.MARGIN) / self.GRID_SIZE)
@@ -389,14 +405,10 @@ class GameRenderer:
         grid_x, grid_y = self.grid_to_screen(row, col)
         dx = mouse_x - grid_x
         dy = mouse_y - grid_y
-        if dx * dx + dy * dy > self.PIECE_RADIUS * self.PIECE_RADIUS:
+        if dx * dx + dy * dy > self.disc_threshold(self.PIECE_RADIUS):
             return None
 
         return row, col
-
-    @staticmethod
-    def update_display() -> None:
-        pygame.display.flip()
 
 
 class MusicController:
@@ -442,8 +454,8 @@ class MusicController:
                         music_files.append(os.path.join(root, file))
 
             return sorted(music_files)
-        except Exception as e:
-            print(f"音楽ファイル検索エラー: {e}")
+        except OSError as error:
+            print(f"音楽ファイル検索エラー: {error}")
             return []
 
     def load_music(self) -> None:
@@ -464,8 +476,8 @@ class MusicController:
             self.music_playing = True
             self.load_state = self.LOAD_STATE_READY
 
-        except Exception as e:
-            print(f"音楽ファイル読み込みエラー: {e}")
+        except (pygame.error, OSError) as error:
+            print(f"音楽ファイル読み込みエラー: {error}")
             self.load_state = self.LOAD_STATE_LOAD_ERROR
             self.music_playing = False
 
@@ -496,6 +508,7 @@ class GomokuGame:
             mouse_x,
             mouse_y,
             music_toggle_enabled,
+            self.music_controller.music_playing,
         ):
             self.music_controller.toggle_music()
         elif not self.game_logic.game_over:
@@ -506,16 +519,13 @@ class GomokuGame:
             row, col = grid_position
             self.game_logic.make_move(row, col)
 
-    def reset_game(self) -> None:
-        self.game_logic.reset()
-
     def handle_event(self, event: pygame.event.Event) -> None:
         if event.type == pygame.QUIT:
             pygame.quit()
             sys.exit()
 
         if event.type == pygame.KEYDOWN and event.key == pygame.K_r:
-            self.reset_game()
+            self.game_logic.reset()
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             mouse_x, mouse_y = event.pos
@@ -535,7 +545,7 @@ class GomokuGame:
             music_toggle_enabled,
             self.music_controller.music_playing,
         )
-        self.renderer.update_display()
+        pygame.display.flip()
 
     def run(self) -> None:
         pygame.key.stop_text_input()
